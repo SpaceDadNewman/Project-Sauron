@@ -6,7 +6,6 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
-import android.view.View;
 import android.widget.ImageButton;
 import android.widget.Toast;
 
@@ -30,11 +29,16 @@ import androidx.core.content.ContextCompat;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.text.SimpleDateFormat;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import okhttp3.*;
+import okio.ByteString;
 
 public class MainActivity extends AppCompatActivity {
     ExecutorService service;
@@ -47,7 +51,11 @@ public class MainActivity extends AppCompatActivity {
         if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startCamera(cameraFacing);
         }
+
     });
+
+    // Add these lines for WebSocket
+    private WebSocket webSocket;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -76,19 +84,58 @@ public class MainActivity extends AppCompatActivity {
             startCamera(cameraFacing);
         }
 
-        flipCamera.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                if (cameraFacing == CameraSelector.LENS_FACING_BACK) {
-                    cameraFacing = CameraSelector.LENS_FACING_FRONT;
-                } else {
-                    cameraFacing = CameraSelector.LENS_FACING_BACK;
-                }
-                startCamera(cameraFacing);
+        flipCamera.setOnClickListener(view -> {
+            if (cameraFacing == CameraSelector.LENS_FACING_BACK) {
+                cameraFacing = CameraSelector.LENS_FACING_FRONT;
+            } else {
+                cameraFacing = CameraSelector.LENS_FACING_BACK;
             }
+            startCamera(cameraFacing);
         });
 
         service = Executors.newSingleThreadExecutor();
+
+        // Initialize WebSocket connection
+        initializeWebSocket();
+    }
+
+    // Add this method to initialize WebSocket
+    private void initializeWebSocket() {
+        OkHttpClient client = new OkHttpClient();
+        Request request = new Request.Builder().url("ws://localhost:3000").build();
+        webSocket = client.newWebSocket(request, new WebSocketListener());
+    }
+
+    // Add this method to send frames over WebSocket
+    private void sendFramesToServer(byte[] frames) {
+        webSocket.send(ByteString.of(frames));
+    }
+
+    private class WebSocketListener extends okhttp3.WebSocketListener implements com.example.cameraxvideorecorder.WebSocketListener {
+        @Override
+        public void onOpen(@NotNull WebSocket webSocket, @NotNull Response response) {
+            // WebSocket connection is established
+        }
+
+        @Override
+        public void onMessage(@NotNull WebSocket webSocket, @NotNull String text) {
+            // Handle text messages from the server (if any)
+        }
+
+        @Override
+        public void onMessage(@NotNull WebSocket webSocket, @NotNull ByteString bytes) {
+            // Handle binary messages from the server (if any)
+        }
+
+        @Override
+        public void onClosed(@NotNull WebSocket webSocket, int code, @NotNull String reason) {
+            // Handle WebSocket being closed
+        }
+
+        @Override
+        public void onFailure(@NotNull WebSocket webSocket, @NotNull Throwable t, @NotNull Response response) {
+            // Handle failure to connect or other errors
+        }
     }
 
     public void captureVideo() {
@@ -149,7 +196,6 @@ public class MainActivity extends AppCompatActivity {
                         .requireLensFacing(cameraFacing).build();
 
                 Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, videoCapture);
-
                 toggleFlash.setOnClickListener(view -> toggleFlash(camera));
             } catch (ExecutionException | InterruptedException e) {
                 e.printStackTrace();
@@ -177,3 +223,4 @@ public class MainActivity extends AppCompatActivity {
         service.shutdown();
     }
 }
+

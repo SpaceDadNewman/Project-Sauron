@@ -3,17 +3,22 @@ package com.example.cameraxvideorecorder;
 import android.Manifest;
 import android.content.ContentValues;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.util.Log;
 import android.widget.ImageButton;
 import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraSelector;
+import androidx.camera.core.ImageAnalysis;
+import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.video.MediaStoreOutputOptions;
@@ -31,6 +36,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 
 import org.jetbrains.annotations.NotNull;
 
+import java.io.ByteArrayOutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Locale;
 import java.util.concurrent.ExecutionException;
@@ -39,8 +45,24 @@ import java.util.concurrent.Executors;
 
 import okhttp3.*;
 import okio.ByteString;
+import android.os.AsyncTask;
+import org.json.JSONException;
+import org.json.JSONObject;
+import android.os.AsyncTask;
+import android.util.Base64;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.ByteBuffer;
+
 
 public class MainActivity extends AppCompatActivity {
+    private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;
+
     ExecutorService service;
     Recording recording = null;
     VideoCapture<Recorder> videoCapture = null;
@@ -54,8 +76,6 @@ public class MainActivity extends AppCompatActivity {
 
     });
 
-    // Add these lines for WebSocket
-    private WebSocket webSocket;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -95,50 +115,67 @@ public class MainActivity extends AppCompatActivity {
 
         service = Executors.newSingleThreadExecutor();
 
-        // Initialize WebSocket connection
-        initializeWebSocket();
     }
 
-    // Add this method to initialize WebSocket
-    private void initializeWebSocket() {
-        OkHttpClient client = new OkHttpClient();
-        Request request = new Request.Builder().url("ws://localhost:3000").build();
-        webSocket = client.newWebSocket(request, new WebSocketListener());
+    // Bitmaps
+    public void sendFramesToServer(byte[] frames) {
+        Log.d("Send Frames", "Sending frames to server");
+        System.out.println("sendFarms is being called");
+
+        AsyncTask.execute(() -> {
+            try {
+                // Set up HttpURLConnection
+                URL url = new URL("https://api.openai.com/v1/analyze");
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+
+                // Set request method to POST
+                connection.setRequestMethod("POST");
+
+                // Set request headers
+                connection.setRequestProperty("Authorization", "const OPENAI_API_KEY = \"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\";\n");
+                connection.setRequestProperty("Content-Type", "application/json");
+
+                // Enable input and output streams
+                connection.setDoInput(true);
+                connection.setDoOutput(true);
+
+                // Create a JSON object to hold the frame data
+                JSONObject jsonBody = new JSONObject();
+                jsonBody.put("frames", Base64.encodeToString(frames, Base64.DEFAULT));
+
+                // Convert JSON object to string
+                String requestBody = jsonBody.toString();
+
+                // Write the request body
+                OutputStream outputStream = connection.getOutputStream();
+                outputStream.write(requestBody.getBytes("UTF-8"));
+                outputStream.close();
+
+                // Get the response code
+                int responseCode = connection.getResponseCode();
+
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    // if there's a response
+                    Log.d("FrameSent", "Frames sent successfully");
+                } else {
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                // Handle exceptions
+            }
+        });
     }
 
-    // Add this method to send frames over WebSocket
-    private void sendFramesToServer(byte[] frames) {
-        webSocket.send(ByteString.of(frames));
-    }
 
-    private class WebSocketListener extends okhttp3.WebSocketListener implements com.example.cameraxvideorecorder.WebSocketListener {
-        @Override
-        public void onOpen(@NotNull WebSocket webSocket, @NotNull Response response) {
-            // WebSocket connection is established
-        }
 
-        @Override
-        public void onMessage(@NotNull WebSocket webSocket, @NotNull String text) {
-            // Handle text messages from the server (if any)
-        }
 
-        @Override
-        public void onMessage(@NotNull WebSocket webSocket, @NotNull ByteString bytes) {
-            // Handle binary messages from the server (if any)
-        }
-
-        @Override
-        public void onClosed(@NotNull WebSocket webSocket, int code, @NotNull String reason) {
-            // Handle WebSocket being closed
-        }
-
-        @Override
-        public void onFailure(@NotNull WebSocket webSocket, @NotNull Throwable t, @NotNull Response response) {
-            // Handle failure to connect or other errors
-        }
-    }
 
     public void captureVideo() {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            // Request RECORD_AUDIO permission here
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO_PERMISSION);
+            return;
+        }
         capture.setImageResource(R.drawable.round_stop_circle_24);
         Recording recording1 = recording;
         if (recording1 != null) {
@@ -146,18 +183,17 @@ public class MainActivity extends AppCompatActivity {
             recording = null;
             return;
         }
-        String name = new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.getDefault()).format(System.currentTimeMillis());
+
         ContentValues contentValues = new ContentValues();
-        contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+        contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, "VIDEO_" + System.currentTimeMillis());
         contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
         contentValues.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/CameraX-Video");
 
         MediaStoreOutputOptions options = new MediaStoreOutputOptions.Builder(getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
-                .setContentValues(contentValues).build();
+                .setContentValues(contentValues)
+                .build();
 
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            return;
-        }
+        // Start recording the video
         recording = videoCapture.getOutput().prepareRecording(MainActivity.this, options).withAudioEnabled().start(ContextCompat.getMainExecutor(MainActivity.this), videoRecordEvent -> {
             if (videoRecordEvent instanceof VideoRecordEvent.Start) {
                 capture.setEnabled(true);
@@ -176,7 +212,12 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+
+
     public void startCamera(int cameraFacing) {
+        ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build();
         ListenableFuture<ProcessCameraProvider> processCameraProvider = ProcessCameraProvider.getInstance(MainActivity.this);
 
         processCameraProvider.addListener(() -> {
@@ -190,12 +231,50 @@ public class MainActivity extends AppCompatActivity {
                         .build();
                 videoCapture = VideoCapture.withOutput(recorder);
 
+
+                // Set up the analyzer to process each frame
+                imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(this), new ImageAnalysis.Analyzer() {
+                    @Override
+                    public void analyze(@NonNull ImageProxy image) {
+                        // Access the frame data from the 'image' object
+                        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+                        byte[] frameData = new byte[buffer.remaining()];
+                        buffer.get(frameData);
+
+                        // Call sendFramesToServer to send the frame data
+                        sendFramesToServer(frameData);
+
+                        // Don't forget to close the ImageProxy to release resources
+                        image.close();
+                    }
+                });
+                //ImageAnalysis use case
+
+
+
+                // Set up the analyzer to process each frame
+                imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(this), new ImageAnalysis.Analyzer() {
+                    @Override
+                    public void analyze(@NonNull ImageProxy image) {
+                        // Access the frame data from the 'image' object
+                        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
+                        byte[] frameData = new byte[buffer.remaining()];
+                        buffer.get(frameData);
+
+                        // Call sendFramesToServer to send the frame data
+                        sendFramesToServer(frameData);
+
+                        //close the ImageProxy to release resources
+                        image.close();
+                    }
+                });
+
                 cameraProvider.unbindAll();
 
                 CameraSelector cameraSelector = new CameraSelector.Builder()
                         .requireLensFacing(cameraFacing).build();
 
-                Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, videoCapture);
+                Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, videoCapture, imageAnalysis);
                 toggleFlash.setOnClickListener(view -> toggleFlash(camera));
             } catch (ExecutionException | InterruptedException e) {
                 e.printStackTrace();
@@ -204,16 +283,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void toggleFlash(Camera camera) {
-        if (camera.getCameraInfo().hasFlashUnit()) {
-            if (camera.getCameraInfo().getTorchState().getValue() == 0) {
-                camera.getCameraControl().enableTorch(true);
-                toggleFlash.setImageResource(R.drawable.round_flash_off_24);
+    }
+
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                // Permission granted, continue with capturing video...
+                // ...
             } else {
-                camera.getCameraControl().enableTorch(false);
-                toggleFlash.setImageResource(R.drawable.round_flash_on_24);
+                // Permission denied, show a message or take appropriate action
+                Toast.makeText(this, "Permission denied. Cannot capture video.", Toast.LENGTH_SHORT).show();
             }
-        } else {
-            runOnUiThread(() -> Toast.makeText(MainActivity.this, "Flash is not available currently", Toast.LENGTH_SHORT).show());
         }
     }
 

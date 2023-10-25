@@ -132,7 +132,7 @@ public class MainActivity extends AppCompatActivity {
                 connection.setRequestMethod("POST");
 
                 // Set request headers
-                connection.setRequestProperty("Authorization", "const OPENAI_API_KEY = \"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\";\n");
+                connection.setRequestProperty("Authorization", "const OPENAI_API_KEY = \"APIKEY\";\n");
                 connection.setRequestProperty("Content-Type", "application/json");
 
                 // Enable input and output streams

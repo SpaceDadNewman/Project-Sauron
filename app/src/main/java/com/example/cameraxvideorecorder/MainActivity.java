@@ -3,9 +3,10 @@ package com.example.cameraxvideorecorder;
 import android.Manifest;
 import android.content.ContentValues;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.util.Log;
 import android.widget.ImageButton;
@@ -18,7 +19,6 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
-import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.video.MediaStoreOutputOptions;
@@ -31,37 +31,39 @@ import androidx.camera.video.VideoRecordEvent;
 import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import android.database.Cursor;
+import android.net.Uri;
+
+
 
 import com.google.common.util.concurrent.ListenableFuture;
 
-import org.jetbrains.annotations.NotNull;
+import java.io.File;
 
-import java.io.ByteArrayOutputStream;
-import java.text.SimpleDateFormat;
-import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import okhttp3.*;
-import okio.ByteString;
-import android.os.AsyncTask;
-import org.json.JSONException;
-import org.json.JSONObject;
-import android.os.AsyncTask;
-import android.util.Base64;
+import okhttp3.MediaType;
+import okhttp3.RequestBody;
+//import okhttp3.Response;
 
-import org.json.JSONException;
-import org.json.JSONObject;
+import okhttp3.MultipartBody;
 
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.ByteBuffer;
+import okhttp3.ResponseBody;
+import retrofit2.Call;
+import retrofit2.Callback;
+import retrofit2.Retrofit;
+import retrofit2.converter.gson.GsonConverterFactory;
+import retrofit2.http.Multipart;
+import retrofit2.http.POST;
+import retrofit2.http.Part;
+import retrofit2.Response;
 
 
 public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;
+
 
     ExecutorService service;
     Recording recording = null;
@@ -69,6 +71,7 @@ public class MainActivity extends AppCompatActivity {
     ImageButton capture, toggleFlash, flipCamera;
     PreviewView previewView;
     int cameraFacing = CameraSelector.LENS_FACING_BACK;
+
     private final ActivityResultLauncher<String> activityResultLauncher = registerForActivityResult(new ActivityResultContracts.RequestPermission(), result -> {
         if (ActivityCompat.checkSelfPermission(MainActivity.this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startCamera(cameraFacing);
@@ -117,59 +120,101 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
-    // Bitmaps
-    public void sendFramesToServer(byte[] frames) {
-        Log.d("Send Frames", "Sending frames to server");
-        System.out.println("sendFarms is being called");
 
-        AsyncTask.execute(() -> {
-            try {
-                // Set up HttpURLConnection
-                URL url = new URL("https://api.openai.com/v1/analyze");
-                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+//send frames to server; somehow
 
-                // Set request method to POST
-                connection.setRequestMethod("POST");
+    private String sendVideoFileToServer(String videoFilePath) {
 
-                // Set request headers
-                connection.setRequestProperty("Authorization", "const OPENAI_API_KEY = \"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\";\n");
-                connection.setRequestProperty("Content-Type", "application/json");
+        // Create Retrofit instance
+        Retrofit retrofit = new Retrofit.Builder()
+                .baseUrl("http://146.190.175.179:3000/")
+                .addConverterFactory(GsonConverterFactory.create())
+                .build();
 
-                // Enable input and output streams
-                connection.setDoInput(true);
-                connection.setDoOutput(true);
+        // Create service interface
+        ApiService apiService = retrofit.create(ApiService.class);
 
-                // Create a JSON object to hold the frame data
-                JSONObject jsonBody = new JSONObject();
-                jsonBody.put("frames", Base64.encodeToString(frames, Base64.DEFAULT));
+        // Create video file as RequestBody
+        File videoFile = new File(videoFilePath);
+//        RequestBody requestFile = okhttp3.RequestBody.create(okhttp3.MediaType.parse("video/mp4"), videoFile);
+        MultipartBody.Part body = MultipartBody.Part.createFormData("video", videoFile.getName(), RequestBody.create(MediaType.parse("multipart/form-data"),videoFile));
 
-                // Convert JSON object to string
-                String requestBody = jsonBody.toString();
-
-                // Write the request body
-                OutputStream outputStream = connection.getOutputStream();
-                outputStream.write(requestBody.getBytes("UTF-8"));
-                outputStream.close();
-
-                // Get the response code
-                int responseCode = connection.getResponseCode();
-
-                if (responseCode == HttpURLConnection.HTTP_OK) {
-                    // if there's a response
-                    Log.d("FrameSent", "Frames sent successfully");
+        // Make the API call
+        Call<ResponseBody> call = apiService.uploadVideo(body);
+        call.enqueue(new Callback<ResponseBody>()
+        {
+            @Override
+            public void onResponse(Call<ResponseBody> call, Response<ResponseBody> response) {
+                Log.d("Server Response", response.toString());
+                Log.d("Server Response", response.toString());
+                if (response.isSuccessful()) {
+                    // Video uploaded successfully
+                    Log.d("Upload", "Video uploaded successfully");
                 } else {
+                    // Handle error response
+                    Log.e("Upload", "Error uploading video. Response code: " + response.code());
                 }
-            } catch (Exception e) {
-                e.printStackTrace();
-                // Handle exceptions
+            }
+            //if response is 200 toast sent successfully, else failed
+
+            @Override
+            public void onFailure(Call<ResponseBody> call, Throwable t) {
+                // Handle failure
+                Log.e("Upload", "Video upload failed", t);
             }
         });
+
+        return videoFilePath;
+    }
+    public interface ApiService {
+        @Multipart
+        @POST("/uploadVideo")
+        Call<ResponseBody> uploadVideo(@Part MultipartBody.Part video);
     }
 
 
+    private String getVideoFilePath(String outputUri) {
+        // Convert the content URI to a file path
+        String[] projection = {MediaStore.Video.Media.DATA};
+        Cursor cursor = getContentResolver().query(Uri.parse(outputUri), projection, null, null, null);
+        int columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DATA);
+        cursor.moveToFirst();
+        String videoFilePath = cursor.getString(columnIndex);
+        Log.d("FilePath", "videoFilePath found");
+        cursor.close();
+        return videoFilePath;
+    }
 
 
+    private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
+    private void sendVideoInBackground(String videoFilePath) {
+        Thread thread = new Thread(() -> {
+            // Perform the background operation (send video to server)
+            String result = sendVideoFileToServer(videoFilePath);
+
+            // Update the UI on the main thread with the result
+            mainHandler.post(() -> handleServerResponse(result));
+        });
+
+        thread.start();
+    }
+
+    private void handleServerResponse(String result) {
+        // This method is called on the main (UI) thread
+        if (result != null) {
+            // Handle the server response (result) here
+            // Example: display a Toast with the server response
+            Toast.makeText(MainActivity.this, "Video sent successfully", Toast.LENGTH_SHORT).show();
+            Log.d("Server Response", result);
+        } else {
+            // Handle the case where the server response is null or an error occurred
+            Toast.makeText(MainActivity.this, "Error sending video", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+
+    //all video capture ==========================
     public void captureVideo() {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             // Request RECORD_AUDIO permission here
@@ -187,34 +232,49 @@ public class MainActivity extends AppCompatActivity {
         ContentValues contentValues = new ContentValues();
         contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, "VIDEO_" + System.currentTimeMillis());
         contentValues.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
-        contentValues.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/CameraX-Video");
+        contentValues.put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/All Seeing Eye");
 
         MediaStoreOutputOptions options = new MediaStoreOutputOptions.Builder(getContentResolver(), MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
                 .setContentValues(contentValues)
                 .build();
 
         // Start recording the video
-        recording = videoCapture.getOutput().prepareRecording(MainActivity.this, options).withAudioEnabled().start(ContextCompat.getMainExecutor(MainActivity.this), videoRecordEvent -> {
-            if (videoRecordEvent instanceof VideoRecordEvent.Start) {
-                capture.setEnabled(true);
-            } else if (videoRecordEvent instanceof VideoRecordEvent.Finalize) {
-                if (!((VideoRecordEvent.Finalize) videoRecordEvent).hasError()) {
-                    String msg = "Video capture succeeded: " + ((VideoRecordEvent.Finalize) videoRecordEvent).getOutputResults().getOutputUri();
-                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
-                } else {
-                    recording.close();
-                    recording = null;
-                    String msg = "Error: " + ((VideoRecordEvent.Finalize) videoRecordEvent).getError();
-                    Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
-                }
-                capture.setImageResource(R.drawable.round_fiber_manual_record_24);
-            }
-        });
+        recording = videoCapture.getOutput().prepareRecording(MainActivity.this, options)
+                .withAudioEnabled()
+                .start(ContextCompat.getMainExecutor(MainActivity.this), videoRecordEvent -> {
+                    if (videoRecordEvent instanceof VideoRecordEvent.Start) {
+                        capture.setEnabled(true);
+                        Toast.makeText(this, "Recording Video", Toast.LENGTH_SHORT).show();
+                    } else if (videoRecordEvent instanceof VideoRecordEvent.Finalize) {
+                        if (!((VideoRecordEvent.Finalize) videoRecordEvent).hasError()) {
+                            String outputUri = ((VideoRecordEvent.Finalize) videoRecordEvent).getOutputResults().getOutputUri().toString();
+                            Toast.makeText(this, "Video capture succeeded, sending to server", Toast.LENGTH_SHORT).show();
+
+                            // Get the recorded video file path
+                            String videoFilePath = getVideoFilePath(outputUri);
+
+                            // Send the recorded video
+//                            sendVideoFileToServer(videoFilePath);
+                            sendVideoInBackground(videoFilePath);
+//                            Toast.makeText(this,"File sending to server", Toast.LENGTH_SHORT).show();
+                        } else {
+                            recording.close();
+                            recording = null;
+                            String msg = "Error: " + ((VideoRecordEvent.Finalize) videoRecordEvent).getError();
+                            Toast.makeText(this, "Error", Toast.LENGTH_SHORT).show();
+                        }
+
+                        capture.setImageResource(R.drawable.round_fiber_manual_record_24);
+                    }
+                });
     }
 
 
 
     public void startCamera(int cameraFacing) {
+        Log.d("CameraX", "startCamera: Initializing camera");
+
+
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build();
@@ -223,6 +283,10 @@ public class MainActivity extends AppCompatActivity {
         processCameraProvider.addListener(() -> {
             try {
                 ProcessCameraProvider cameraProvider = processCameraProvider.get();
+                if (cameraProvider == null) { //debugging for preview
+                    Log.e("CameraX", "Camera provider is null");
+                    return;
+                }
                 Preview preview = new Preview.Builder().build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
@@ -231,58 +295,16 @@ public class MainActivity extends AppCompatActivity {
                         .build();
                 videoCapture = VideoCapture.withOutput(recorder);
 
-
-                // Set up the analyzer to process each frame
-                imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(this), new ImageAnalysis.Analyzer() {
-                    @Override
-                    public void analyze(@NonNull ImageProxy image) {
-                        // Access the frame data from the 'image' object
-                        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-                        byte[] frameData = new byte[buffer.remaining()];
-                        buffer.get(frameData);
-
-                        // Call sendFramesToServer to send the frame data
-                        sendFramesToServer(frameData);
-
-                        // Don't forget to close the ImageProxy to release resources
-                        image.close();
-                    }
-                });
-                //ImageAnalysis use case
-
-
-
-                // Set up the analyzer to process each frame
-                imageAnalysis.setAnalyzer(ContextCompat.getMainExecutor(this), new ImageAnalysis.Analyzer() {
-                    @Override
-                    public void analyze(@NonNull ImageProxy image) {
-                        // Access the frame data from the 'image' object
-                        ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-                        byte[] frameData = new byte[buffer.remaining()];
-                        buffer.get(frameData);
-
-                        // Call sendFramesToServer to send the frame data
-                        sendFramesToServer(frameData);
-
-                        //close the ImageProxy to release resources
-                        image.close();
-                    }
-                });
-
                 cameraProvider.unbindAll();
 
                 CameraSelector cameraSelector = new CameraSelector.Builder()
                         .requireLensFacing(cameraFacing).build();
 
                 Camera camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, videoCapture, imageAnalysis);
-                toggleFlash.setOnClickListener(view -> toggleFlash(camera));
             } catch (ExecutionException | InterruptedException e) {
                 e.printStackTrace();
             }
         }, ContextCompat.getMainExecutor(MainActivity.this));
-    }
-
-    private void toggleFlash(Camera camera) {
     }
 
 

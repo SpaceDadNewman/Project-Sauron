@@ -2,13 +2,18 @@ package com.example.cameraxvideorecorder;
 
 import android.Manifest;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.VibrationEffect;
 import android.provider.MediaStore;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
+import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.Toast;
 
@@ -40,6 +45,8 @@ import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.File;
 
+import java.util.HashMap;
+import java.util.Locale;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -59,12 +66,15 @@ import retrofit2.http.Multipart;
 import retrofit2.http.POST;
 import retrofit2.http.Part;
 import retrofit2.Response;
+import android.os.Vibrator;
+
+import org.w3c.dom.Text;
 
 
 public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;
 
-
+    private TextToSpeech textToSpeech;
     ExecutorService service;
     Recording recording = null;
     VideoCapture<Recorder> videoCapture = null;
@@ -118,9 +128,46 @@ public class MainActivity extends AppCompatActivity {
 
         service = Executors.newSingleThreadExecutor();
 
+        textToSpeech = new TextToSpeech(this, status -> {
+            if (status == TextToSpeech.SUCCESS) {
+                int result = textToSpeech.setLanguage(Locale.getDefault());
+
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    Toast.makeText(MainActivity.this, "Language not supported", Toast.LENGTH_SHORT).show();
+                } else {
+                    // Read aloud a hardcoded message when the MainActivity is created
+//                    readAloud("Hello, this is a hardcoded message.");
+                }
+            } else {
+                Toast.makeText(MainActivity.this, "Text to Speech initialization failed", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                @Override
+                public void onStart(String utteranceId) {
+                    // Utterance started
+                }
+
+                @Override
+                public void onDone(String utteranceId) {
+                    // Utterance completed
+                }
+
+                @Override
+                public void onError(String utteranceId) {
+                    // Utterance encountered an error
+                }
+            });
+        }
+
     }
 
-
+    private void readAloud(String message) {
+        String utteranceId = "readAloudUtterance";
+        textToSpeech.speak(message, TextToSpeech.QUEUE_FLUSH, null, utteranceId);
+    }
 //send frames to server; somehow
 
     private String sendVideoFileToServer(String videoFilePath) {
@@ -147,6 +194,7 @@ public class MainActivity extends AppCompatActivity {
             public void onResponse(Call<ResponseBody> call, Response<ResponseBody> response) {
                 Log.d("Server Response", response.toString());
                 Log.d("Server Response", response.toString());
+
                 if (response.isSuccessful()) {
                     // Video uploaded successfully
                     Log.d("Upload", "Video uploaded successfully");
@@ -205,11 +253,15 @@ public class MainActivity extends AppCompatActivity {
         if (result != null) {
             // Handle the server response (result) here
             // Example: display a Toast with the server response
-            Toast.makeText(MainActivity.this, "Video sent successfully", Toast.LENGTH_SHORT).show();
+            Toast.makeText(MainActivity.this, "Good API Connection, video sent successfully", Toast.LENGTH_SHORT).show();
+            Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            v.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE));
+            readAloud("Video sent successfully");
             Log.d("Server Response", result);
         } else {
             // Handle the case where the server response is null or an error occurred
             Toast.makeText(MainActivity.this, "Error sending video", Toast.LENGTH_SHORT).show();
+            readAloud("Error sending video");
         }
     }
 
@@ -245,18 +297,18 @@ public class MainActivity extends AppCompatActivity {
                     if (videoRecordEvent instanceof VideoRecordEvent.Start) {
                         capture.setEnabled(true);
                         Toast.makeText(this, "Recording Video", Toast.LENGTH_SHORT).show();
+                        readAloud("Recording Video");
                     } else if (videoRecordEvent instanceof VideoRecordEvent.Finalize) {
                         if (!((VideoRecordEvent.Finalize) videoRecordEvent).hasError()) {
                             String outputUri = ((VideoRecordEvent.Finalize) videoRecordEvent).getOutputResults().getOutputUri().toString();
                             Toast.makeText(this, "Video capture succeeded, sending to server", Toast.LENGTH_SHORT).show();
+                            readAloud("Video capture succeeded");
 
                             // Get the recorded video file path
                             String videoFilePath = getVideoFilePath(outputUri);
 
                             // Send the recorded video
-//                            sendVideoFileToServer(videoFilePath);
                             sendVideoInBackground(videoFilePath);
-//                            Toast.makeText(this,"File sending to server", Toast.LENGTH_SHORT).show();
                         } else {
                             recording.close();
                             recording = null;
@@ -327,6 +379,10 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         service.shutdown();
+        if (textToSpeech != null) {
+            textToSpeech.stop();
+            textToSpeech.shutdown();
+        }
     }
 }
 
